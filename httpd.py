@@ -24,7 +24,7 @@ class OtusServer:
     # BASIC_PAGE = 'http://' + str(SOCKET_SERVER_HOST) + ':' + str(SOCKET_SERVER_PORT) + '/'
     SERVER_HEADER = b'Server: Otus Server/1.1(Win64)\r\n'
 
-    logging.basicConfig(filename=None, level=logging.INFO, format='[%(asctime)s] %(levelname)s %(message)s',
+    logging.basicConfig(filename=None, level=logging.INFO, format='[%(asctime)s] - %(levelname)s - %(message)s',
                         datefmt='%Y-%m-%d %H:%M:%S')
     from http.server import BaseHTTPRequestHandler, SimpleHTTPRequestHandler
 
@@ -60,9 +60,10 @@ class OtusServer:
             user_socket.send(OtusServer.OK_HEADER)
             user_socket.send(b'Date: ' + str(datetime.datetime.now()).encode('utf-8') + b'\r\n') #date_header
             user_socket.send(OtusServer.SERVER_HEADER)
-            # user_socket.send('Content‑Length: 111'.encode('utf-8') + b'\r\n') ##узнать длину пакета
-            user_socket.send(b'ContentLength: test\r\n') ##узнать длину пакета
-            user_socket.send(b'Connection: close\r\n') ## close?
+            user_socket.send(b'ContentLength: ' + str(os.path.getsize(path)).encode() + b'\r\n')
+
+
+            user_socket.send(b'Connection: close\r\n') ## close? ## Is that right?? What need to write ??
         if code == 403: user_socket.send(OtusServer.FORBIDDEN_REQUEST_HEADER)
         if code == 404: user_socket.send(OtusServer.NOT_FOUND_HEADER)
         if code == 405: user_socket.send(OtusServer.NOT_ALLOWED_REQUEST_HEADER)
@@ -73,26 +74,13 @@ class OtusServer:
     def cust_html_to_byte(self, html_str):
         return html_str.replace(b'\n',b'').replace(b'\r',b'').replace(b'\t',b'')
 
-    def is_path_exist(self, path_to_page):
-        try:
-            return os.path.exists(OtusServer.DOCUMENT_ROOT + path_to_page)
-        except Exception as ex:
-            logging.error('Get exception while finding your page')
-            logging.error(ex)
-
     def get_page(self, user_socket, path_to_page):
-        if self.is_path_exist(path_to_page):
-            path_array = path_to_page.replace('/',' ').split()
-            result_path = os.path.join(OtusServer.DOCUMENT_ROOT,*path_array)
-            if result_path.strip() == OtusServer.DOCUMENT_ROOT or os.path.isdir(result_path.replace('/','\\')):
-                result_path = os.path.join(result_path, 'index.html')
-
-            # logging.info(str(datetime.datetime.now()), result_path)
-
+        if path_to_page.count('.html') == 0 :
+            path_to_page = os.path.join(path_to_page,'index.html') ##через os.path.join()
+        if os.path.exists(path_to_page):
             self.send_html_header(user_socket,path_to_page,200) #Отправляем заголовок
-            with open(result_path, 'rb') as html_page:
+            with open(path_to_page, 'rb') as html_page:
                 file_str = html_page.read()
-                # print(file_str)
                 user_socket.sendall(self.cust_html_to_byte(file_str))
         else:
             self.send_html_header(user_socket,path_to_page, 404) #Отправляем заголовок
@@ -105,10 +93,34 @@ class OtusServer:
     def method_handler(self, request, user_socket):
         str_data = request.decode('utf-8')
         method, path, type = str_data.split('\n')[0].split()
+        # print('path  ', path)
+        # print('path  ', path)
+        # print(str_data)
+        # print(str_data.split('\n')[0])
+        path = os.path.abspath(OtusServer.DOCUMENT_ROOT + path.replace('/', '\\'))
+
+        # print(path)
+        # print(path)
+        # print(path)
+
         if method == "GET" or method == "HEAD":
             if re.search(r'(\.css|\.js|\.jpg|\.jpeg|\.png|\.gif|\.swf)', path): #Нет проверок
-                self.send_html_header(user_socket, path, 200)
-                self.get_file(path = OtusServer.DOCUMENT_ROOT + path.replace('/','\\'), user_socket=user_socket)
+                # print('rerre')
+                # self.send_html_header(user_socket, path, 200)
+                # print(str_data.split('\n')[5].split('/')[-1])
+                path = path.split('\\')
+                first_part = path[:-1]
+                first_part[0] = first_part[0]+'\\'
+                last_part = path[-1]
+                print(last_part)
+
+                final_path = os.path.join(os.path.join(*first_part),str_data.split('\n')[5].split('/')[-1],last_part)
+                print('TEST :: ' + final_path)
+                print(type(final_path))
+
+
+
+                self.get_file(path=path, user_socket=user_socket)
             else:
                 self.get_page(user_socket, path)
         else: #else 405 error
@@ -132,11 +144,11 @@ class OtusServer:
                         self.method_handler(request=data, user_socket=connection)
                     logging.info(f'close {address}')
                 except Exception as ex:
-                    logging.info(ex)
+                    logging.error(ex)
                 finally:
                     connection.close()
         except Exception as ex:
-            logging.info(ex)
+            logging.error(ex)
         finally:
             serv_socket.close()
 
