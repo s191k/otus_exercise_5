@@ -10,6 +10,7 @@ import threading
 from multiprocessing.dummy import Pool as ThreadPool
 import concurrent
 import concurrent.futures
+from urllib.parse import unquote
 
 class OtusServer:
     SOCKET_SERVER_HOST = 'localhost'
@@ -119,8 +120,7 @@ class OtusServer:
                     if temp_line.count('Referer:') == 1:
                         referer = temp_line.split()[1].replace('\r','').replace('\n','').replace('\t','')
                 full_url_path = (referer + path).replace((r'http://' + OtusServer.SOCKET_SERVER_HOST + ':' + str(OtusServer.SOCKET_SERVER_PORT)),'')
-                path = OtusServer.DOCUMENT_ROOT + full_url_path.replace('/','\\')
-                if path.count('%20') > 0: path = path.replace('%20', '')
+                path = unquote(OtusServer.DOCUMENT_ROOT + full_url_path.replace('/','\\'))
                 self.send_html_header(user_socket, path, 200)
                 self.get_file(path=path, user_socket=user_socket)
             else:
