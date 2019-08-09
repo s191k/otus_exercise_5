@@ -149,7 +149,7 @@ class OtusServer:
         #TODO
         # Если соединение не закрывается - то страница как бы и не загрузилась.
         try:
-            with concurrent.futures.ThreadPoolExecutor() as executor:
+            with concurrent.futures.ThreadPoolExecutor(OtusServer.WORKERS_AMOUNT) as executor:
                 while True:
                     try:
                         connection, address = serv_socket.accept()
