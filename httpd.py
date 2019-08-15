@@ -1,16 +1,19 @@
+import concurrent
 import datetime
 import logging
 import os
+import queue
 import re
 import socket
 import argparse
+import threading
+from multiprocessing.dummy import Pool as ThreadPool
 import concurrent
 import concurrent.futures
-import threading
 from urllib.parse import unquote
 
 class OtusServer:
-    SOCKET_SERVER_HOST = '127.0.0.1'
+    SOCKET_SERVER_HOST = 'localhost'
     SOCKET_SERVER_PORT = 9999
     SOCKET_SERVER = (SOCKET_SERVER_HOST, SOCKET_SERVER_PORT)
     PACKAGE_SIZE = 1024
@@ -18,18 +21,19 @@ class OtusServer:
     DOCUMENT_ROOT = 'DOCUMENT_ROOT'
     empty_values = (None,(),[],{})
     WORKERS_AMOUNT = 1
+
+    #200 403 404 405
     OK_HEADER = b'HTTP/1.x 200 OK\r\n'
     NOT_FOUND_HEADER = b'HTTP/1.x 404 Bad Request\r\n'
     FORBIDDEN_REQUEST_HEADER = b'HTTP/1.x 403 Forbidden\r\n'
     NOT_ALLOWED_REQUEST_HEADER = b'HTTP/1.x 405 Method Not Allowed\r\n'
     CONTENT_TYPE_HEADER = b'Content-Type: text/html; charset=UTF-8\r\n'
+    # BASIC_PAGE = 'http://' + str(SOCKET_SERVER_HOST) + ':' + str(SOCKET_SERVER_PORT) + '/'
     SERVER_HEADER = b'Server: Otus Server/1.1(Win64)\r\n'
+
     logging.basicConfig(filename=None, level=logging.INFO, format='[%(asctime)s] - %(levelname)s - %(message)s',
                         datefmt='%Y-%m-%d %H:%M:%S')
-
-    def __init__(self):
-        self.workers_pool = []
-        self.serv_socket = None
+    from http.server import BaseHTTPRequestHandler, SimpleHTTPRequestHandler
 
     def arg_parser(self):
         argument_parser = argparse.ArgumentParser()
@@ -54,19 +58,22 @@ class OtusServer:
             return b'Content-Type: image/png\r\n'
         elif path.endswith('.gif'):
             return b'Content-Type: image/gif\r\n'
+        # elif path.endswith('.swf'): ???
+        #     return b'Content-Type: application/javascript\r\n' ???
         elif path.endswith('.ico'): #???
             return b'Content-Type: image/vnd.microsoft.icon\r\n' #???
 
-    def send_html_header(self, user_socket,path, code=200):
+    def send_html_header(self, user_socket,path, code=200, content_length=1):
         if code == 200:
             user_socket.send(OtusServer.OK_HEADER)
-            user_socket.send(b'Date: ' + str(datetime.datetime.now()).encode('utf-8') + b'\r\n')
+            user_socket.send(b'Date: ' + str(datetime.datetime.now()).encode('utf-8') + b'\r\n') #date_header
             user_socket.send(OtusServer.SERVER_HEADER)
             user_socket.send(b'ContentLength: ' + str(os.path.getsize(path)).encode() + b'\r\n')
-            user_socket.send(b'Connection: close\r\n')
+            user_socket.send(b'Connection: close\r\n') ## close? ## Is that right?? What need to write ??
         if code == 403: user_socket.send(OtusServer.FORBIDDEN_REQUEST_HEADER)
         if code == 404: user_socket.send(OtusServer.NOT_FOUND_HEADER)
         if code == 405: user_socket.send(OtusServer.NOT_ALLOWED_REQUEST_HEADER)
+        # user_socket.send(CONTENT_TYPE_HEADER)
         user_socket.send(self.get_content_type(path))
         user_socket.send(b'\r\n')
 
@@ -83,10 +90,10 @@ class OtusServer:
             result_path = os.path.join(result_path, 'index.html')
         return result_path
 
-    # def _get_result_path_file_helper(self,path_to_file): ####???
-    #     path_array = path_to_file.replace('/', ' ').split()
-    #     result_path = os.path.join(OtusServer.DOCUMENT_ROOT, *path_array)
-    #     return result_path
+    def _get_result_path_file_helper(self,path_to_file): ####???
+        path_array = path_to_file.replace('/', ' ').split()
+        result_path = os.path.join(OtusServer.DOCUMENT_ROOT, *path_array)
+        return result_path
 
     def get_page(self, user_socket, path_to_page):
         if self.is_path_exist(path_to_page):
@@ -108,22 +115,17 @@ class OtusServer:
         if method == "GET" or method == "HEAD":
             if re.search(r'(\.css|\.js|\.jpg|\.jpeg|\.png|\.gif|\.swf)', path) and method == "GET":
                 temp = str_data.split('\n')
-                for temp_line in temp: #searching referer_url -- need get package name
+                #searching referer_url -- need get package name
+                for temp_line in temp:
                     if temp_line.count('Referer:') == 1:
                         referer = temp_line.split()[1].replace('\r','').replace('\n','').replace('\t','')
-                path_array = path.split('/')
-                referer_array = referer.split('/')
-                if path_array[1] in referer_array:
-                    full_url_path = (path).replace(
-                        (r'http://' + OtusServer.SOCKET_SERVER_HOST + ':' + str(OtusServer.SOCKET_SERVER_PORT)), '')
-                else:
-                    full_url_path = (referer + path).replace((r'http://' + OtusServer.SOCKET_SERVER_HOST + ':' + str(OtusServer.SOCKET_SERVER_PORT)),'')
+                full_url_path = (referer + path).replace((r'http://' + OtusServer.SOCKET_SERVER_HOST + ':' + str(OtusServer.SOCKET_SERVER_PORT)),'')
                 path = unquote(OtusServer.DOCUMENT_ROOT + full_url_path.replace('/','\\'))
                 self.send_html_header(user_socket, path, 200)
                 self.get_file(path=path, user_socket=user_socket)
             else:
                 self.get_page(user_socket, path)
-        else:
+        else: #else 405 error
             self.send_html_header(user_socket,path, 405)
             user_socket.sendall(b"that's ERROR-request")
 
@@ -136,48 +138,40 @@ class OtusServer:
                 break
         return data
 
-    def _create_server(self):
+    def run_server(self):
         serv_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         serv_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         serv_socket.bind(OtusServer.SOCKET_SERVER)
         serv_socket.listen(OtusServer.MAX_LISTENER_NUMBER)
         self.arg_parser()
         logging.info(f'Server start work: {OtusServer.SOCKET_SERVER_HOST}:{OtusServer.SOCKET_SERVER_PORT}')
-        return serv_socket
 
-    def run_server(self):
+        #TODO
+        # Если соединение не закрывается - то страница как бы и не загрузилась.
         try:
-            self.serv_socket = self._create_server()
-            for i in range(OtusServer.WORKERS_AMOUNT):
-                thread = threading.Thread(target=self.serve_thread)
-                thread.daemon = True
-                thread.start()
-                self.workers_pool.append(thread)
-            while True:
-                pass
-        except Exception as ex:
-            logging.error(f'Server has stoped work by exception: {ex}')
+            with concurrent.futures.ThreadPoolExecutor(OtusServer.WORKERS_AMOUNT) as executor:
+                while True:
+                    try:
+                        connection, address = serv_socket.accept()
 
-    def serve_thread(self):
-        try:
-            while True:
-                connection, address = self.serv_socket.accept()
-                try:
-                    logging.info(f"new connection from {address}")
-                    data = self._get_client_response(connection)
-                    if data:
-                        self.method_handler(request=data, user_socket=connection)
+                        # connection.settimeout(5)
+                        ## Это ужас надо чтобы соединение закрывалось
+                        # почему оно не закрывается??
+
+                        logging.info(f"new connection from {address}")
+                        data = self._get_client_response(connection)
+
+                        if data:
+                            executor.submit(self.method_handler, data, connection)
                         logging.info(f'close {address}')
-                except Exception as ex:
-                    logging.error(ex)
-                finally:
-                    connection.close()
+                    except Exception as ex:
+                        logging.error(ex)
+                    finally:
+                        connection.close()
         except Exception as ex:
             logging.error(ex)
         finally:
-            self.serv_socket.close()
-
-
+            serv_socket.close()
 
 otus_server = OtusServer()
 otus_server.run_server()
